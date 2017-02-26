@@ -1,0 +1,471 @@
+#include "main.h"
+
+int main(int args, char *argv[]){
+	int i;
+	setfiles(args, argv);
+	
+	printf("\n.................Reading Parameter File.................");
+	readinput();
+	allocatememory();
+	
+	initialization(initpos, initvelocity);
+
+	printf("\n Number of particles = %d \n Total timesteps = %d", n, runs);
+	printf("\n Mass = %lf", mass*sfmass);
+	
+	printf("\nTimestep \t Temperature \t KE \t PE \t TE \n");
+	for(i=0; i<runs; i++)
+	{
+		forcecalculation();
+		energycalculation();
+		velocityrescale(thermotype);
+		boundaryupdate(initboundary);
+		
+		if(i%10==0)
+			printoutput();
+			
+		stepahead();
+	}
+	
+	rdfcalculation();
+	printf("\n.................RDF Calculation..............\n");
+	freememory();
+	printf("\n.................Memory Freed..............\n");
+	printf("\n.................All Done..............\n");
+	
+	return 0;
+}
+
+void setfiles(int args, char *argv[])
+{
+   int i;
+
+   if(args < 3) {
+    printf("Usage: %s -b parameter_filename\n",argv[0]);
+    exit(0);
+   } 
+   else {
+    for(i=1;i<args;i=i+2) 
+    {
+      if(strcmp(argv[i],"-b") == 0) 
+      {
+	strncpy(parfile,argv[i+1], (size_t) 64);
+      } else 
+      {
+        printf("Unknown option : %s \n", argv[i]);
+        exit(0);
+      }
+    }
+   }
+      
+  return;
+}
+
+void allocatememory()
+{
+	atom0.x = create1Darray(n);
+	atom0.y = create1Darray(n);
+	atom0.z = create1Darray(n);
+	atom.x = create1Darray(n);
+	atom.y = create1Darray(n);
+	atom.z = create1Darray(n);
+	atom0.px = create1Darray(n);
+	atom0.py = create1Darray(n);
+	atom0.pz = create1Darray(n);
+	atom.px = create1Darray(n);
+	atom.py = create1Darray(n);
+	atom.pz = create1Darray(n);
+	atomhalf.px = create1Darray(n);
+	atomhalf.py = create1Darray(n);
+	atomhalf.pz = create1Darray(n);
+	inittemp = create1Darray(5);
+	hist = create1Darray(maxbin);
+	rdf = create1Darray(maxbin);
+	rbin = create1Darray(maxbin);
+	
+	return;
+}
+
+double *create1Darray(int nx)
+{
+  
+  double *space;
+  int i;
+
+  space = (double *) malloc (nx * sizeof (double));
+  
+  for (i = 0; i < nx; i++)
+    {
+      space[i] = 0.0;
+    }
+
+  return (space);
+}
+
+void readinput(void)
+{ 
+   int i;
+   FILE *fptr;
+   printf("\n Opening parameter file %s \n", parfile);
+   
+   if ((fptr = fopen(parfile,"r")) == NULL){
+       printf("Error! opening file");
+   }
+
+   fscanf(fptr,"%d", &n);
+   fscanf(fptr,"%d", &runs);
+   fscanf(fptr,"%lf", &dt);
+   fscanf(fptr,"%d %d %d %d", &thermotype, &initpos, &initvelocity, &initboundary);
+   fscanf(fptr,"%lf %lf", &mass, &rho);
+   fscanf(fptr,"%lf %lf %lf", &lbox, &bbox, &hbox);
+   fscanf(fptr,"%lf %lf", &tau, &nu);
+   fscanf(fptr,"%lf %lf", &epsi, &sigma);
+   fscanf(fptr,"%lf %lf %lf %lf %lf %lf %lf", &sfmass, &sfenergy, &sftemp, &sfpressure, &sfl, &sfp, &sft);
+   
+   for(i=0; i<5; i++)
+   	fscanf(fptr,"%lf", &inittemp[i]);
+
+   fclose(fptr); 
+  
+   return;
+}
+
+void initialization(int initpos, int initvelocity)
+{
+	int i,j,k;
+	double ran;
+	double sumvx=0, sumvy=0, sumvz=0, sumv2=0;
+	double sf;
+	
+	//INITIALIZING CUT OFF DISTANCE;
+	rcutoff = 2.5*sigma;
+	
+	//INITIALIZING COORDINATES
+	//UNIFORM DISTRIBUTION
+	if(initpos == 1)
+	{
+		int buf;
+		buf = floor(abs(sqrt(n)))+1;
+		for(i=0; i<buf; i++)
+		{
+			for(j=0; j<buf; j++)
+			{
+				for(k=0; k<buf; k++)
+				{
+					atom0.x[i] = lbox*(i+1)/buf;
+					atom0.y[j] = bbox*(j+1)/buf;
+					atom0.z[k] = hbox*(k+1)/buf;
+				}
+			}
+		}	
+	}
+	//RANDOM DISTRIBUTION
+	else if(initpos ==2)
+	{
+		for(i=0; i<n; i++)
+		{
+			ran = abs(rand()/RAND_MAX)-0.5;
+			atom0.x[i] = ran*lbox;
+			ran = abs(rand()/RAND_MAX)-0.5;
+			atom0.y[i] = ran*bbox;
+			ran = abs(rand()/RAND_MAX)-0.5;
+			atom0.z[i] = ran*hbox;
+		}
+		
+	}
+	//READ FROM FILE
+	else if(initpos == 3)
+	{}
+	
+	//INITIALIZING VELOCITIES 
+	//UNIFORM VELOCITY
+	if(initvelocity == 1)
+	{
+		
+	}
+	//RANDOM DISTRIBUTION
+	else if(initvelocity == 2)
+	{
+		for(i=0; i<n; i++)
+		{
+			ran = abs(rand()/RAND_MAX)-0.5;
+			atom0.px[i] = ran;
+			ran = abs(rand()/RAND_MAX)-0.5;
+			atom0.py[i] = ran;
+			ran = abs(rand()/RAND_MAX)-0.5;
+			atom0.pz[i] = ran;
+			
+			sumvx+=(atom0.px[i]/mass);
+			sumvy+=(atom0.py[i]/mass);
+			sumvz+=(atom0.pz[i]/mass);
+			
+			sumv2=+(atom0.px[i]*atom0.px[i]+atom0.py[i]*atom0.py[i]+atom0.pz[i]*atom0.pz[i])/(mass*mass);
+		}
+		
+		sumvx=sumvx/n;
+		sumvy=sumvy/n;
+		sumvz=sumvz/n;
+		sumv2=sumv2/n;
+		
+		temp0 = inittemp[0];
+		sf=abs(sqrt(3.0*temp0/sumv2));
+		
+		for(i=0; i<n; i++)
+		{
+			atom0.px[i]=mass*sf*((atom0.px[i]/mass)-sumvx);
+			atom0.py[i]=mass*sf*((atom0.py[i]/mass)-sumvy);
+			atom0.py[i]=mass*sf*((atom0.py[i]/mass)-sumvy);
+		}
+	}
+	//READ FROM FILE
+	else if(initvelocity == 3)
+	{}
+	
+	//PRINT INITIAL CONFIGURATION
+	
+	return;
+	
+}
+
+void forcecalculation()
+{
+	int i,j;
+	double rx, ry, rz, rij;
+	
+	//VELOCITY VERLET ALGORITHM
+	for(i=0; i<n; i++)
+	{
+		for(j=0; j!=i, j<n; j++)
+		{
+			rx = atom0.x[j]-atom0.x[i];
+			ry = atom0.y[j]-atom0.y[i];
+			rz = atom0.z[j]-atom0.z[i];
+			
+			rij = abs(sqrt(rx*rx+ry*ry+rz*rz));
+			
+			if(rij<=rcutoff)
+			{
+				fx = (-24.0*epsi*(2*pow(sigma/rij, 12)-pow(sigma/rij, 6))*rx)/pow(rij, 2);
+				fy = (-24.0*epsi*(2*pow(sigma/rij, 12)-pow(sigma/rij, 6))*ry)/pow(rij, 2);
+				fz = (-24.0*epsi*(2*pow(sigma/rij, 12)-pow(sigma/rij, 6))*rz)/pow(rij, 2);
+			
+				atom.x[i] = atom0.x[i]+(dt*atom0.x[i]/mass)+(dt*dt*0.5*fx);
+				atom.y[i] = atom0.y[i]+(dt*atom0.y[i]/mass)+(dt*dt*0.5*fy);
+				atom.z[i] = atom0.z[i]+(dt*atom0.z[i]/mass)+(dt*dt*0.5*fz);
+			
+				atomhalf.px[i] = ((atom0.px[i]/mass)+(dt*0.5*fx/mass))*mass;
+				atomhalf.py[i] = ((atom0.py[i]/mass)+(dt*0.5*fy/mass))*mass;
+				atomhalf.py[i] = ((atom0.py[i]/mass)+(dt*0.5*fy/mass))*mass;
+			
+				rx = atom.x[j]-atom.x[i];
+				ry = atom.y[j]-atom.y[i];
+				rz = atom.z[j]-atom.z[i];
+			
+				rij = abs(sqrt(rx*rx+ry*ry+rz*rz));
+				fx = (-24.0*epsi*(2*pow(sigma/rij, 12)-pow(sigma/rij, 6))*rx)/pow(rij, 2);
+				fy = (-24.0*epsi*(2*pow(sigma/rij, 12)-pow(sigma/rij, 6))*ry)/pow(rij, 2);
+				fz = (-24.0*epsi*(2*pow(sigma/rij, 12)-pow(sigma/rij, 6))*rz)/pow(rij, 2);
+			
+				atom.px[i] = ((atomhalf.px[i]/mass)+(dt*0.5*fx/mass))*mass;
+				atom.py[i] = ((atomhalf.py[i]/mass)+(dt*0.5*fy/mass))*mass;
+				atom.pz[i] = ((atomhalf.pz[i]/mass)+(dt*0.5*fz/mass))*mass;
+			}
+		}
+	}
+	
+	return;
+}
+
+void energycalculation()
+{
+	ke = 0.0;
+	pe = 0.0;
+	int i,j;
+	double rx, ry, rz, rij;
+	
+	for(i=0; i<n; i++)
+	{
+		ke+=(atom.px[i]*atom.px[i]+atom.py[i]*atom.py[i]+atom.pz[i]*atom.pz[i])/(2.0*mass);
+	}
+	
+	for(i=0; i<n; i++)
+	{
+		for(j=n-1; j!=i, j<n; j++)
+		{
+			rx = atom.x[j]-atom.x[i];
+			ry = atom.y[j]-atom.y[i];
+			rz = atom.z[j]-atom.z[i];
+			
+			rij = abs(sqrt(rx*rx+ry*ry+rz*rz));	
+			
+			if(rij<=rcutoff)
+			{
+				pe+=4.0*epsi*(pow(sigma/rij,12)-pow(sigma/rij,6));	
+			}
+		}
+	}
+	
+	te = pe+ke;
+	temp = ke*2.0*mass/(3.0*n*kb);
+	
+	return;
+}
+
+void stepahead()
+{
+	int i;
+	//STEPPING
+	for(i=0; i<n; i++)
+	{
+		atom0.x[i]=atom.x[i];
+		atom0.y[i]=atom.y[i];
+		atom0.z[i]=atom.z[i];
+		atom0.px[i]=atom.px[i];
+		atom0.py[i]=atom.py[i];
+		atom0.pz[i]=atom.pz[i];
+	}	
+	runtime+=dt;
+	temp0=temp;
+	return;
+}
+
+void boundaryupdate(int initboundary)
+{
+	int i,j,k;
+	
+	//FIXED BOUNDARY
+	if(initboundary == 0)
+	{
+	}
+	//PERIODIC BOUNDARY
+	else if(initboundary == 1)
+	{
+		for(i=0; i<n; i++)
+		{
+			if(abs(atom.x[i])>=(lbox/2.0))
+				atom.x[i] = atom.x[i]-lbox*abs(atom.x[i])/atom.x[i];
+			if(abs(atom.y[i])>=(bbox/2.0))
+				atom.y[i] = atom.y[i]-bbox*abs(atom.y[i])/atom.y[i];
+			if(abs(atom.z[i])>=(hbox/2.0))
+				atom.z[i] = atom.z[i]-hbox*abs(atom.z[i])/atom.z[i]; 
+		}
+	}
+	
+	return;
+}
+
+void rdfcalculation()
+{
+	int i,j;
+	double rx, ry, rz, rij, delr;
+	double rlow, rup, volume;
+	int bin = 0;
+	
+	delr = hbox/((double)(2.0*maxbin));
+	
+	for(i=0; i<n; i++)
+	{
+		for(j=i+1; j<n; j++)
+		{
+			rx = atom.x[j]-atom.x[i];
+			ry = atom.y[j]-atom.y[i];
+			rz = atom.z[j]-atom.z[i];
+			
+			rij = abs(sqrt(rx*rx+ry*ry+rz*rz));	
+			bin = abs(rij/delr);
+			
+			if(bin<=maxbin)
+				hist[bin]+=2.0;
+		}
+	}
+	
+	for(bin=0; bin<maxbin; bin++)
+	{
+		rlow = (double)((bin-1)*delr);
+		rup = rlow+delr;
+		volume = 4.0*pi*rho*(pow(rup,3)-pow(rlow,3))/3.0;
+		rdf[bin] = hist[bin]/(runs*volume*n);
+		rbin[bin] = rlow+(delr/2.0);
+	}
+	
+	FILE *fp;
+  	char filename[100];
+  
+  	sprintf (filename, "rdf.m");
+
+   fp=fopen(filename,"a");
+  
+   fprintf(fp,"rdf = [");
+   for(bin=0; bin<maxbin; bin++)
+   	fprintf(fp,"%lf ", rdf[bin]);
+   fprintf(fp, "]\n");
+   
+   fprintf(fp,"rbin = [");
+   for(bin=0; bin<maxbin; bin++)
+   	fprintf(fp,"%lf ", rbin[bin]);
+   fprintf(fp, "]\n");
+  
+   fclose(fp);
+	
+	return;
+}
+
+void velocityrescale(int thermotype)
+{
+	int i;
+	double sf;
+	
+	//ANDERSON THERMOSTAT
+	if(thermotype == 1)
+	{
+		
+	}
+	//BERENDSON THERMOSTAT
+	else if(thermotype == 2)
+	{
+		sf = abs(sqrt(1.0+(dt*((temp/temp0)-1)/tau)));
+		for(i=0; i<n; i++)
+			atom.px[i] = sf*atom.px[i];/**/
+	}
+}
+
+void printoutput()
+{
+  int i;
+  FILE *fp;
+  char filename[100];
+  
+  sprintf (filename, "log.dat");
+  printf("%lf \t %lf \t %lf \t %lf \t %lf \n ", runtime, temp, ke, pe, te);
+
+  fp=fopen(filename,"a");
+  fprintf(fp, "%lf \t %lf \t %lf \t %lf \t %lf \n ", runtime, temp, ke, pe, te);
+  fclose(fp);
+  return;
+}
+
+void freememory()
+{
+	free(atom0.x);
+	free(atom0.y);
+	free(atom0.z);
+	free(atom.x);
+	free(atom.y);
+	free(atom.z);
+	free(atom0.px);
+	free(atom0.py);
+	free(atom0.pz);
+	free(atom.px);
+	free(atom.py);
+	free(atom.pz);
+	free(atomhalf.px);
+	free(atomhalf.py);
+	free(atomhalf.pz);
+	free(inittemp);
+	free(hist);
+	free(rdf);
+	free(rbin);
+	
+	return;
+}
+
